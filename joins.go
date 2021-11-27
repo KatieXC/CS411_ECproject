@@ -32,7 +32,9 @@ func setup_table(filename string, joinCol string) ([][]string, int) {
 
 	for scanner.Scan() {
 		if row_count == 0 || row_count%STEPLENGTH == 0 {
-			table = append(table, strings.Split(scanner.Text(), "|"))
+			// Choose delimiter
+			table = append(table, strings.Split(scanner.Text(), ","))
+			// table = append(table, strings.Split(scanner.Text(), "|"))
 		}
 		row_count++
 	}

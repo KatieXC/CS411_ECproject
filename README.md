@@ -16,8 +16,10 @@ Due to the size of some tables, the join operation could take an extra long time
 
 Ex: STEPLENGTH = 10 --> Only read in one row for every 10 rows.
 
+The input files' delimeters can also be updated in the *joins.go* file on line 36.
+
 ## Benchmarks
-These benchmarks were collected using input tables lineitem and orders and join column ORDERKEY.  In order to get enough benchmarks in a reasonable time, I set STEPLENGTH to 20
+These benchmarks were collected using input tables lineitem and orders and join column ORDERKEY.  In order to get enough benchmarks in a reasonable time, I set STEPLENGTH to 20 (see above section for how).
 
 | Hash Join         || Nested Loop Join     ||
 | Run | Time (ms)    | Run | Time ()         |
