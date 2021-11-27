@@ -7,122 +7,43 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 const NUMARGS int = 6
+const STEPLENGTH int = 20 // lineitem |><| orders -> set to 20
+// (Sticking to rows in R * rows in S ~= 2x10^10)
 
-type join_method int
-
-const (
-	NESTED_LOOP join_method = iota
-	HASH
-)
-
-type table_data struct {
-	Headers []string
-	Data    map[string][]string // key = col name, value = [col value at row 0, col value at row 1, ...]
-	JoinCol int
-}
-
-var err error
-var method join_method
-var table1 table_data
-var table2 table_data
-var outputFile *os.File
-
-func check(err error) {
+func check(msg string, err error) {
 	if err != nil {
-		log.Fatal("Error occurred!\n")
+		log.Fatal(msg)
 	}
 }
 
-func print_table_start(table *table_data) {
-	for _, h := range table.Headers {
-		fmt.Printf("Column: %s\n", h)
-		for i, val := range table.Data[h] {
-			if i >= 5 {
-				break
-			}
-			fmt.Printf("%s\n", val)
-		}
-	}
-}
+func setup_table(filename string, joinCol string) ([][]string, int) {
+	var table [][]string
+	row_count := 0
+	joinIdx := -1
 
-func setup_table(table *table_data, filename string, joinColName string) {
-	fmt.Printf("Args: %s with col %s\n", filename, joinColName)
-	f, err := os.Open(filename)
-	if err != nil {
-		log.Fatal("CSV file could not be opened.\n")
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Scan()
-	table.Headers = strings.Split(scanner.Text(), "|")
-	for i, h := range table.Headers {
-		// fmt.Printf("Header Found: %s\n", h)
-		table.Data[h] = []string{}
-		if strings.EqualFold(h, joinColName) { // Case Insensitive column check
-			table.JoinCol = i
-		}
-	}
+	csv_file, err := os.Open(filename)
+	check("CSV file 1 could not be opened.\n", err)
+	defer csv_file.Close()
+	scanner := bufio.NewScanner(csv_file)
 
 	for scanner.Scan() {
-		row_str := scanner.Text()
-		// fmt.Printf("Row = %s\n", row_str)
-		row := strings.Split(row_str, "|")
-		for i, value := range row[:len(row)-1] {
-			table.Data[table.Headers[i]] = append(table.Data[table.Headers[i]], value)
+		if row_count == 0 || row_count%STEPLENGTH == 0 {
+			table = append(table, strings.Split(scanner.Text(), "|"))
 		}
+		row_count++
 	}
-	print_table_start(table)
-}
-
-func run_nested_loop(output_filename string) {
-	joinHeader1 := table1.Headers[table1.JoinCol]
-	joinHeader2 := table2.Headers[table2.JoinCol]
-
-	outputFile, err := os.OpenFile(output_filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY|os.O_TRUNC, os.ModePerm)
-	check(err)
-	out_writer := csv.NewWriter(outputFile)
-	defer func() {
-		out_writer.Flush()
-		err = out_writer.Error()
-		check(err)
-		outputFile.Close()
-	}()
-
-	fmt.Println("Starting Timer...")
-	// Start timer
-
-	for i, r := range table1.Data[joinHeader1] {
-		for j, s := range table2.Data[joinHeader2] {
-			if r == s {
-				// fmt.Printf("Creating row on %s==%s\n", r, s)
-				var out_row []string
-				for _, h1 := range table1.Headers {
-					out_row = append(out_row, table1.Data[h1][i])
-				}
-				for hidx, h2 := range table2.Headers {
-					if hidx == table2.JoinCol {
-						continue
-					}
-					out_row = append(out_row, table2.Data[h2][j])
-				}
-				// for _, row_val := range out_row {
-				// 	fmt.Printf("%s ", row_val)
-				// }
-				out_writer.Write(out_row)
-			}
+	for i, h := range table[0] {
+		if h == joinCol {
+			joinIdx = i
 		}
 	}
 
-	// End timer
-	fmt.Println("...Timer Ended")
-}
-
-func run_hash(output_filename string) {
-
+	fmt.Printf("Table: %s joining on column: %s (idx=%d)\n#Rows = %d\n", filename, joinCol, joinIdx, len(table)-1)
+	return table, joinIdx
 }
 
 func main() {
@@ -131,19 +52,69 @@ func main() {
 	if len(argv) != NUMARGS {
 		log.Fatal("usage: go run joins.go <input1.csv> <join_col_name1> <input2.csv> <join_col_name2> <join method> <output.csv>\n")
 	}
+	filename1 := argv[0]
+	filename2 := argv[2]
+	joinCol1 := argv[1]
+	joinCol2 := argv[3]
+	joinMethod := argv[4]
+	outputFilename := argv[5]
 
-	table1.Data = make(map[string][]string)
-	table2.Data = make(map[string][]string)
-	setup_table(&table1, argv[0], argv[1])
-	setup_table(&table2, argv[2], argv[3])
+	/* Setup Tables */
+	table1, joinIdx1 := setup_table(filename1, joinCol1)
+	table2, joinIdx2 := setup_table(filename2, joinCol2)
+	if joinIdx1 == -1 || joinIdx2 == -1 {
+		log.Fatal("Join Column does not exist.\n")
+	}
 
-	if strings.EqualFold(argv[4], "HASH") {
-		run_hash(argv[5])
-	} else if strings.EqualFold(argv[4], "NESTED_LOOP") {
-		run_nested_loop(argv[5])
+	/* Output File Setup */
+	outputFile, err := os.OpenFile(outputFilename, os.O_CREATE|os.O_APPEND|os.O_WRONLY|os.O_TRUNC, os.ModePerm)
+	check("Output file couldn't be made.\n", err)
+	out_writer := csv.NewWriter(outputFile)
+	defer func() {
+		out_writer.Flush()
+		err = out_writer.Error()
+		check("Output Writing Error.\n", err)
+		outputFile.Close()
+	}()
+
+	/* Perform Join */
+	if strings.EqualFold(joinMethod, "HASH") {
+		fmt.Println("Timer Starting...")
+		start := time.Now() // Time join operation
+
+		// Hash Join
+		hashmap := make(map[string][]string)
+		for _, r := range table1 {
+			hashmap[r[joinIdx1]] = r
+		}
+		for _, s := range table2 {
+			r, check_id := hashmap[s[joinIdx2]]
+			if check_id {
+				out_writer.Write(append(r, s...))
+			}
+		}
+
+		duration := time.Since(start)
+		fmt.Println("...Timer Ended")
+		fmt.Println(duration)
+	} else if strings.EqualFold(joinMethod, "NESTED_LOOP") {
+		fmt.Println("Timer Starting...")
+		start := time.Now() // Time join operation
+
+		// Nested Loop Join
+		for _, r := range table1 {
+			for _, s := range table2 {
+				if r[joinIdx1] == s[joinIdx2] {
+					out_writer.Write(append(r, s...))
+				}
+			}
+		}
+
+		duration := time.Since(start)
+		fmt.Println("...Timer Ended")
+		fmt.Println(duration)
 	} else {
 		log.Fatal("Invalid join method request: 'HASH' or 'NESTED_LOOP'.")
 	}
-
-	fmt.Printf("End of Main\n")
+	fmt.Printf("End of Join\n")
 }
